@@ -10,3 +10,5 @@ wheels/
 .venv
 .env
 bm25_index.pkl
+embedding_processor.log
+embeddings_insert.log
