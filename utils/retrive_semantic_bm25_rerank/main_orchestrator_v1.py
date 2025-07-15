@@ -22,6 +22,7 @@ from .query_enhancer import QueryEnhancer
 from .search_manager import SearchManager
 from .result_processor import ResultProcessor
 from utils.llm_api_inference.anthropic_apis import AsyncAnthropicClient
+from utils.llm_api_inference.openai_apis import AsyncOpenAIClient
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -99,6 +100,7 @@ class SemanticSearchPipeline:
     
     def __init__(self, 
                  anthropic_config: Dict[str, Any],
+                 openai_config: Dict[str, Any],
                  voyage_config: Dict[str, Any],
                  db_config: Dict[str, Any],
                  bm25_index_path: str = "bm25_index.pkl"):
@@ -120,6 +122,10 @@ class SemanticSearchPipeline:
         self.anthropic_client = AsyncAnthropicClient(
             api_key=anthropic_config.get("api_key"),
             model=anthropic_config.get("model", "claude-3-sonnet-20240229")
+        )
+        self.openai_client = AsyncOpenAIClient(
+            api_key=openai_config.get("api_key"),
+            model=openai_config.get("model", "gpt-3.5-turbo")
         )
         self.chat_model = anthropic_config.get("model", "claude-3-sonnet-20240229")
         self.chat_max_tokens = anthropic_config.get("max_tokens", 2000)
@@ -151,22 +157,25 @@ class SemanticSearchPipeline:
             cleaned_chunk = ' '.join(cleaned_chunk.split())
             
             # Add sentence number
-            sentence = f"sentence {i}: {cleaned_chunk}"
+            # sentence = f"sentence {i}: {cleaned_chunk}"
+            sentence = f"{cleaned_chunk}"
             context_sentences.append(sentence)
         
         return '\n'.join(context_sentences)
     
     def _create_default_system_prompt(self) -> str:
         """Create the default system prompt for chat responses."""
-        return """You are a helpful AI assistant. You will be provided with a user question and relevant context from search results. Use the context to provide accurate, comprehensive answers.
-
-Guidelines:
-- Base your response primarily on the provided context
-- If the context doesn't contain enough information, acknowledge this clearly
-- Cite relevant sentences when appropriate (e.g., "According to sentence 3...")
-- Provide clear, well-structured responses
-- If asked about sources, refer to the sentence numbers from the context
-- Be concise but thorough in your explanations"""
+        return """You are an helpful AI assistant. You are tasked to answer user <Question> based on the <Context> provided by following below Instructions:
+                    1. Understand the User Intent based on the question
+                    2. Analyze the context based on the User Intent
+                    3. while answering Pretend as if you answering based on your knowledge
+                    4. Output Formatting Guidelines:
+                        a. Headings & Subheadings: Use clear hierarchical headings (e.g., ## Main Topic, ### Subtopic).
+                        b. Numbered List / Bullet Points/Lists: Break down complex information into scannable lists.
+                        c. Tables: Use Markdown tables for comparisons, stats, or structured data.
+                        d. Bold Key Terms: Highlight important terms/conclusions.
+                        e. Citations: Link or attribute sources if available (e.g., "(Source: XYZ Study, 2023)").
+                        f. Conciseness: Prioritize factual accuracy over fluff."""
     
     def _format_user_message(self, user_question: str, context: str) -> str:
         """
@@ -179,11 +188,11 @@ Guidelines:
         Returns:
             Formatted message string
         """
-        return f"""<user_question>{user_question}</user_question>
+        return f"""<Question>{user_question}</Question>
 
-<context>
-{context}
-</context>"""
+                    <Context>
+                    {context}
+                    </Context>"""
     
     async def initialize(self):
         """Initialize all components."""
@@ -212,7 +221,9 @@ Guidelines:
                            options: SearchOptions,
                            top_k_semantic: int = 100,
                            top_k_bm25: int = 100,
-                           top_k_final: int = 20) -> PipelineResult:
+                           top_k_final: int = 20,
+                           max_results: int = 1
+                           ) -> PipelineResult:
         """
         Process a user query through the complete pipeline.
         
@@ -297,12 +308,12 @@ Guidelines:
         
         # Step 6: Prepare context for chat - ALWAYS use top 3 from reranked results
         step_start = time.time()
-        context_for_chat = self._prepare_context_from_results(reranked_results, max_results=3)
-        
+        context_for_chat = self._prepare_context_from_results(reranked_results, max_results=max_results)
+
         if options.enhance_query and enhanced_queries:
-            logger.info(f"Prepared context from top 3 reranked results (after processing {len(enhanced_queries)} enhanced queries)")
+            logger.info(f"Prepared context from top {max_results} reranked results (after processing {len(enhanced_queries)} enhanced queries)")
         else:
-            logger.info("Prepared context from top 3 reranked results")
+            logger.info(f"Prepared context from top {max_results} reranked results")
         step_timings["context_preparation"] = time.time() - step_start
         
         total_time = time.time() - start_time
@@ -325,9 +336,11 @@ Guidelines:
                                     user_question: str,
                                     options: SearchOptions,
                                     custom_system_prompt: Optional[str] = None,
-                                    top_k_semantic: int = 100,
-                                    top_k_bm25: int = 100,
-                                    top_k_final: int = 20) -> AsyncGenerator[str, None]:
+                                    top_k_semantic: int = 10,
+                                    top_k_bm25: int = 10,
+                                    top_k_final: int = 5,
+                                    max_results: int = 1
+                                    ) -> AsyncGenerator[str, None]:
         """
         Perform search and stream chat response.
         
@@ -355,13 +368,14 @@ Guidelines:
                 options,
                 top_k_semantic=top_k_semantic,
                 top_k_bm25=top_k_bm25,
-                top_k_final=top_k_final
+                top_k_final=top_k_final,
+                max_results=max_results
             )
             
             # Use the prepared context (always top 3 from reranked results)
             context = search_result.context_for_chat
             
-            logger.info(f"Using top 3 results from {len(search_result.reranked_results)} reranked results as context")
+            logger.info(f"Using top {max_results} results from {len(search_result.reranked_results)} reranked results as context")
             
             # Create system prompt
             system_prompt = custom_system_prompt or self._create_default_system_prompt()
@@ -379,7 +393,7 @@ Guidelines:
             
             # Stream the chat response
             logger.info("Starting chat stream generation")
-            async for chunk in self.anthropic_client.chat_stream(system_prompt, messages):
+            async for chunk in self.openai_client.chat_stream(system_prompt, messages):
                 yield chunk
             
             logger.info("Chat stream completed successfully")
@@ -394,7 +408,9 @@ Guidelines:
                                      custom_system_prompt: Optional[str] = None,
                                      top_k_semantic: int = 100,
                                      top_k_bm25: int = 100,
-                                     top_k_final: int = 20) -> tuple[PipelineResult, str]:
+                                     top_k_final: int = 20,
+                                     max_results: int = 1
+                                     ) -> tuple[PipelineResult, str]:
         """
         Perform search and get complete chat response using TOP 3 reranked results as context.
         
@@ -418,13 +434,14 @@ Guidelines:
                 options,
                 top_k_semantic=top_k_semantic,
                 top_k_bm25=top_k_bm25,
-                top_k_final=top_k_final
+                top_k_final=top_k_final,
+                max_results=max_results
             )
             
             # Use ONLY TOP 3 results as context (already prepared in process_query)
             context = search_result.context_for_chat
             
-            logger.info(f"Search completed, generating chat response with TOP 3 results as context from {len(search_result.reranked_results)} total results")
+            logger.info(f"Search completed, generating chat response with TOP {max_results} results as context from {len(search_result.reranked_results)} total results")
             
             # Create system prompt
             system_prompt = custom_system_prompt or self._create_default_system_prompt()
@@ -443,7 +460,7 @@ Guidelines:
             # Get complete chat response
             chat_response = await self.anthropic_client.chat(system_prompt, messages)
             
-            logger.info("Chat response generated successfully using top 3 results")
+            logger.info("Chat response generated successfully using top {max_results} results")
             
             return search_result, chat_response
                 
@@ -552,9 +569,12 @@ async def example_with_chat_streaming():
     # Configuration
     anthropic_config = {
         "api_key": "your_anthropic_api_key",
-        "model": "claude-3-5-sonnet-latest",
-        "max_tokens": 2000,
-        "temperature": 0.7
+        "model": "claude-3-5-sonnet-latest"
+    }
+    
+    openai_config = {
+        "api_key": "your_openai_api_key",
+        "model": "gpt-3.5-turbo"
     }
     
     voyage_config = {
@@ -574,6 +594,7 @@ async def example_with_chat_streaming():
     # Initialize pipeline
     pipeline = SemanticSearchPipeline(
         anthropic_config=anthropic_config,
+        openai_config=openai_config,
         voyage_config=voyage_config,
         db_config=db_config,
         bm25_index_path="/utils/bm25_inference/bm25_index.pkl"

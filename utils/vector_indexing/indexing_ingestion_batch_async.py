@@ -110,7 +110,7 @@ class AsyncEmbeddingProcessor:
         Returns:
             bool: True if validation passes
         """
-        required_keys = {'chunk', 'metadata_text', 'source_file'}
+        required_keys = {'chunk', 'source_file'}
         
         if not input_data:
             logger.error("Input data is empty")

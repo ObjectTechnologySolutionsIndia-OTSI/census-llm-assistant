@@ -86,44 +86,97 @@ class AsyncEmbeddingsDBManager:
                     logger.info("Database connection closed")
 
     async def create_embeddings_table(self):
-        """Create the embeddings table if it doesn't exist."""
-        create_table_query = """
-        CREATE TABLE IF NOT EXISTS document_embeddings (
-            id UUID PRIMARY KEY,
-            chunk TEXT NOT NULL,
-            embedding VECTOR(1024),  -- Adjust dimension based on your embedding model
-            metadata_text TEXT,
-            source_file TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        -- Create indexes for better performance
-        CREATE INDEX IF NOT EXISTS idx_embeddings_source_file ON document_embeddings(source_file);
-        CREATE INDEX IF NOT EXISTS idx_embeddings_created_at ON document_embeddings(created_at);
-        
-        -- Create a trigger to update the updated_at timestamp
-        CREATE OR REPLACE FUNCTION update_updated_at_column()
-        RETURNS TRIGGER AS $$
-        BEGIN
-            NEW.updated_at = CURRENT_TIMESTAMP;
-            RETURN NEW;
-        END;
-        $$ language 'plpgsql';
-        
-        DROP TRIGGER IF EXISTS update_embeddings_updated_at ON document_embeddings;
-        CREATE TRIGGER update_embeddings_updated_at
-            BEFORE UPDATE ON document_embeddings
-            FOR EACH ROW
-            EXECUTE FUNCTION update_updated_at_column();
-        """
-
         try:
             async with self.get_db_connection() as conn:
-                await conn.execute(create_table_query)
-                logger.info("Successfully created/verified document_embeddings table")
+
+                # 1. Create table with new structure
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS document_embeddings (
+                        id UUID PRIMARY KEY,
+                        chunk TEXT NOT NULL,
+                        embedding VECTOR(1024),
+                        source_domain TEXT,
+                        menu TEXT,
+                        menu_item TEXT,
+                        source_link TEXT,
+                        file_name TEXT,
+                        title TEXT,
+                        source_file TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                print("✅ Table ensured with new structure")
+
+                # 2. Create indexes
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_embeddings_source_file
+                    ON document_embeddings(source_file)
+                """)
+                print("✅ Index on source_file ensured")
+
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_embeddings_source_domain
+                    ON document_embeddings(source_domain)
+                """)
+                print("✅ Index on source_domain ensured")
+
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_embeddings_menu
+                    ON document_embeddings(menu)
+                """)
+                print("✅ Index on menu ensured")
+
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_embeddings_menu_item
+                    ON document_embeddings(menu_item)
+                """)
+                print("✅ Index on menu_item ensured")
+
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_embeddings_created_at
+                    ON document_embeddings(created_at)
+                """)
+                print("✅ Index on created_at ensured")
+
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_embeddings_title
+                    ON document_embeddings(title)
+                """)
+                print("✅ Index on title ensured")
+
+                # 3. Create function
+                await conn.execute("""
+                    CREATE OR REPLACE FUNCTION update_updated_at_column()
+                    RETURNS TRIGGER AS $$
+                    BEGIN
+                        NEW.updated_at = CURRENT_TIMESTAMP;
+                        RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql
+                """)
+                print("✅ Trigger function ensured")
+
+                # 4. Drop trigger (if exists)
+                await conn.execute("""
+                    DROP TRIGGER IF EXISTS update_embeddings_updated_at
+                    ON document_embeddings
+                """)
+                print("✅ Old trigger dropped (if existed)")
+
+                # 5. Create trigger
+                await conn.execute("""
+                    CREATE TRIGGER update_embeddings_updated_at
+                    BEFORE UPDATE ON document_embeddings
+                    FOR EACH ROW
+                    EXECUTE FUNCTION update_updated_at_column()
+                """)
+                print("✅ Trigger created")
+
+                logger.info("Successfully created or verified all embedding-related DB components")
+
         except Exception as e:
-            logger.error(f"Error creating table: {e}")
+            logger.error(f"Error in DB setup: {e}")
             raise
 
     async def validate_input_data(self, data: List[Dict[str, Any]]) -> bool:
@@ -136,7 +189,8 @@ class AsyncEmbeddingsDBManager:
         Returns:
             bool: True if validation passes
         """
-        required_fields = {"id", "chunk", "embedding", "metadata_text", "source_file"}
+        required_fields = {"id", "chunk", "embedding", "source_file"}
+        optional_fields = {"source_domain", "menu", "menu_item", "source_link", "file_name", "title"}
 
         if not data:
             logger.warning("Input data is empty")
@@ -163,6 +217,11 @@ class AsyncEmbeddingsDBManager:
             if not isinstance(record["embedding"], (list, tuple)):
                 logger.error(f"Record {i} embedding is not a list/array")
                 return False
+
+            # Set default values for optional fields if not provided
+            for field in optional_fields:
+                if field not in record:
+                    record[field] = None
 
         logger.info(f"Input data validation passed for {len(data)} records")
         return True
@@ -203,22 +262,33 @@ class AsyncEmbeddingsDBManager:
                                 (
                                     record["id"],
                                     record["chunk"],
-                                    json.dumps(
-                                        record["embedding"]
-                                    ),  # Convert list to JSON string for asyncpg
-                                    record["metadata_text"],
+                                    json.dumps(record["embedding"]),  # Convert list to JSON string for asyncpg
+                                    record.get("source_domain"),
+                                    record.get("menu"),
+                                    record.get("menu_item"),
+                                    record.get("source_link"),
+                                    record.get("file_name"),
+                                    record.get("title"),
                                     record["source_file"],
                                 )
                             )
 
                         # Execute batch insert using asyncpg's executemany
                         insert_query = """
-                        INSERT INTO document_embeddings (id, chunk, embedding, metadata_text, source_file)
-                        VALUES ($1, $2, $3::vector, $4, $5)
+                        INSERT INTO document_embeddings (
+                            id, chunk, embedding, source_domain, menu, menu_item, 
+                            source_link, file_name, title, source_file
+                        )
+                        VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10)
                         ON CONFLICT (id) DO UPDATE SET
                             chunk = EXCLUDED.chunk,
                             embedding = EXCLUDED.embedding,
-                            metadata_text = EXCLUDED.metadata_text,
+                            source_domain = EXCLUDED.source_domain,
+                            menu = EXCLUDED.menu,
+                            menu_item = EXCLUDED.menu_item,
+                            source_link = EXCLUDED.source_link,
+                            file_name = EXCLUDED.file_name,
+                            title = EXCLUDED.title,
                             source_file = EXCLUDED.source_file,
                             updated_at = CURRENT_TIMESTAMP
                         """
@@ -289,19 +359,32 @@ class AsyncEmbeddingsDBManager:
                                         record["id"],
                                         record["chunk"],
                                         json.dumps(record["embedding"]),
-                                        record["metadata_text"],
+                                        record.get("source_domain"),
+                                        record.get("menu"),
+                                        record.get("menu_item"),
+                                        record.get("source_link"),
+                                        record.get("file_name"),
+                                        record.get("title"),
                                         record["source_file"],
                                     )
                                 )
 
                             # Execute batch insert
                             insert_query = """
-                            INSERT INTO document_embeddings (id, chunk, embedding, metadata_text, source_file)
-                            VALUES ($1, $2, $3::vector, $4, $5)
+                            INSERT INTO document_embeddings (
+                                id, chunk, embedding, source_domain, menu, menu_item, 
+                                source_link, file_name, title, source_file
+                            )
+                            VALUES ($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10)
                             ON CONFLICT (id) DO UPDATE SET
                                 chunk = EXCLUDED.chunk,
                                 embedding = EXCLUDED.embedding,
-                                metadata_text = EXCLUDED.metadata_text,
+                                source_domain = EXCLUDED.source_domain,
+                                menu = EXCLUDED.menu,
+                                menu_item = EXCLUDED.menu_item,
+                                source_link = EXCLUDED.source_link,
+                                file_name = EXCLUDED.file_name,
+                                title = EXCLUDED.title,
                                 source_file = EXCLUDED.source_file,
                                 updated_at = CURRENT_TIMESTAMP
                             """
@@ -343,7 +426,10 @@ class AsyncEmbeddingsDBManager:
                 query = """
                     SELECT 
                         COUNT(*) as total_records,
-                        COUNT(DISTINCT source_file) as unique_sources,
+                        COUNT(DISTINCT source_file) as unique_source_files,
+                        COUNT(DISTINCT source_domain) as unique_source_domains,
+                        COUNT(DISTINCT menu) as unique_menus,
+                        COUNT(DISTINCT menu_item) as unique_menu_items,
                         MIN(created_at) as earliest_record,
                         MAX(created_at) as latest_record
                     FROM document_embeddings
@@ -353,7 +439,10 @@ class AsyncEmbeddingsDBManager:
                 if result:
                     stats = {
                         "total_records": result["total_records"],
-                        "unique_sources": result["unique_sources"],
+                        "unique_source_files": result["unique_source_files"],
+                        "unique_source_domains": result["unique_source_domains"],
+                        "unique_menus": result["unique_menus"],
+                        "unique_menu_items": result["unique_menu_items"],
                         "earliest_record": result["earliest_record"],
                         "latest_record": result["latest_record"],
                     }
@@ -365,44 +454,109 @@ class AsyncEmbeddingsDBManager:
             return {}
 
     async def search_similar_embeddings(
-        self, query_embedding: List[float], limit: int = 10
+        self, query_embedding: List[float], limit: int = 10, filters: Dict[str, Any] = None
     ) -> List[Dict[str, Any]]:
         """
-        Search for similar embeddings using cosine similarity.
+        Search for similar embeddings using cosine similarity with optional filters.
 
         Args:
             query_embedding: The embedding vector to search for
             limit: Maximum number of results to return
+            filters: Optional filters (e.g., {'source_domain': 'example.com', 'menu': 'products'})
 
         Returns:
             List of dictionaries containing similar embeddings
         """
         try:
             async with self.get_db_connection() as conn:
-                query = """
+                base_query = """
                     SELECT 
                         id,
                         chunk,
-                        metadata_text,
+                        source_domain,
+                        menu,
+                        menu_item,
+                        source_link,
+                        file_name,
+                        title,
                         source_file,
                         1 - (embedding <=> $1::vector) as similarity_score
                     FROM document_embeddings
-                    ORDER BY embedding <=> $1::vector
-                    LIMIT $2
                 """
+                
+                where_conditions = []
+                params = [json.dumps(query_embedding)]
+                param_counter = 2
 
-                query_vector = json.dumps(query_embedding)
-                results = await conn.fetch(query, query_vector, limit)
+                if filters:
+                    for key, value in filters.items():
+                        if value is not None:
+                            where_conditions.append(f"{key} = ${param_counter}")
+                            params.append(value)
+                            param_counter += 1
 
+                if where_conditions:
+                    query = f"{base_query} WHERE {' AND '.join(where_conditions)} ORDER BY embedding <=> $1::vector LIMIT ${param_counter}"
+                else:
+                    query = f"{base_query} ORDER BY embedding <=> $1::vector LIMIT ${param_counter}"
+                
+                params.append(limit)
+                
+                results = await conn.fetch(query, *params)
                 return [dict(result) for result in results]
 
         except Exception as e:
             logger.error(f"Error searching similar embeddings: {e}")
             return []
 
+    async def get_records_by_filters(self, filters: Dict[str, Any], limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Get records by applying filters on the new columns.
+
+        Args:
+            filters: Dictionary of filters (e.g., {'source_domain': 'example.com', 'menu': 'products'})
+            limit: Maximum number of results to return
+
+        Returns:
+            List of dictionaries containing filtered records
+        """
+        try:
+            async with self.get_db_connection() as conn:
+                base_query = """
+                    SELECT 
+                        id, chunk, source_domain, menu, menu_item, 
+                        source_link, file_name, title, source_file,
+                        created_at, updated_at
+                    FROM document_embeddings
+                """
+                
+                where_conditions = []
+                params = []
+                param_counter = 1
+
+                for key, value in filters.items():
+                    if value is not None:
+                        where_conditions.append(f"{key} = ${param_counter}")
+                        params.append(value)
+                        param_counter += 1
+
+                if where_conditions:
+                    query = f"{base_query} WHERE {' AND '.join(where_conditions)} ORDER BY created_at DESC LIMIT ${param_counter}"
+                else:
+                    query = f"{base_query} ORDER BY created_at DESC LIMIT ${param_counter}"
+                
+                params.append(limit)
+                
+                results = await conn.fetch(query, *params)
+                return [dict(result) for result in results]
+
+        except Exception as e:
+            logger.error(f"Error getting records by filters: {e}")
+            return []
+
 
 async def main():
-    """Example usage of the AsyncEmbeddingsDBManager."""
+    """Example usage of the AsyncEmbeddingsDBManager with new table structure."""
 
     # Database configuration
     db_config = {
@@ -413,20 +567,30 @@ async def main():
         "database": os.getenv("POSTGRES_DBNAME"),
     }
 
-    # Sample data (replace with your actual data)
+    # Sample data with new structure
     sample_data = [
         {
             "id": str(uuid.uuid4()),
-            "chunk": "This is a sample text chunk for embedding.",
-            "embedding": [0.1, 0.2, 0.3] * 512,  # Example 1536-dimensional vector
-            "metadata_text": "Sample metadata for document processing",
+            "chunk": "This is a sample text chunk for embedding from the products page.",
+            "embedding": [0.1, 0.2, 0.3] * 341 + [0.1, 0.2, 0.3][:1024-(341*3)],  # Ensure exactly 1024 dimensions
+            "source_domain": "example.com",
+            "menu": "products",
+            "menu_item": "laptops",
+            "source_link": "https://example.com/products/laptops",
+            "file_name": "products_laptops.html",
+            "title": "Latest Laptops Collection",
             "source_file": "sample_document.pdf",
         },
         {
             "id": str(uuid.uuid4()),
-            "chunk": "Another sample text chunk with different content.",
-            "embedding": [0.4, 0.5, 0.6] * 512,  # Example 1536-dimensional vector
-            "metadata_text": "Different metadata for another chunk",
+            "chunk": "Another sample text chunk with different content from services.",
+            "embedding": [0.4, 0.5, 0.6] * 341 + [0.4, 0.5, 0.6][:1024-(341*3)],  # Ensure exactly 1024 dimensions
+            "source_domain": "example.com",
+            "menu": "services",
+            "menu_item": "support",
+            "source_link": "https://example.com/services/support",
+            "file_name": "services_support.html",
+            "title": "Customer Support Services",
             "source_file": "another_document.pdf",
         },
         # Add more records as needed
@@ -456,12 +620,28 @@ async def main():
             stats = await db_manager.get_table_stats()
             print(f"Table statistics: {stats}")
 
-            # Example similarity search
-            if sample_data:
-                similar_results = await db_manager.search_similar_embeddings(
-                    sample_data[0]["embedding"], limit=5
-                )
-                print(f"Similar embeddings found: {len(similar_results)}")
+            # # Example similarity search with filters
+            # if sample_data:
+            #     # Search without filters
+            #     similar_results = await db_manager.search_similar_embeddings(
+            #         sample_data[0]["embedding"], limit=5
+            #     )
+            #     print(f"Similar embeddings found: {len(similar_results)}")
+
+            #     # Search with filters
+            #     filtered_results = await db_manager.search_similar_embeddings(
+            #         sample_data[0]["embedding"], 
+            #         limit=5,
+            #         filters={"source_domain": "example.com", "menu": "products"}
+            #     )
+            #     print(f"Filtered similar embeddings found: {len(filtered_results)}")
+
+            #     # Get records by filters
+            #     records_by_filter = await db_manager.get_records_by_filters(
+            #         {"menu": "products"}, limit=10
+            #     )
+            #     print(f"Records with menu='products': {len(records_by_filter)}")
+
         else:
             logger.error("Some records failed to insert")
 

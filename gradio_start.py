@@ -15,6 +15,8 @@ load_dotenv()
 # Configuration
 anthropic_config = {"model": "claude-3-sonnet-20240229"}
 
+openai_config = {"model": "gpt-4o", "max_tokens": 500, "temperature": 0.1}
+
 voyage_config = {"embedding_model": "voyage-3-large", "rerank_model": "rerank-2"}
 
 db_config = {
@@ -34,6 +36,7 @@ async def chat_stream(user_input, history):
         # Initialize pipeline
         pipeline = SemanticSearchPipeline(
             anthropic_config=anthropic_config,
+            openai_config=openai_config,
             voyage_config=voyage_config,
             db_config=db_config,
             bm25_index_path="./utils/bm25_inference/bm25_index.pkl"
@@ -43,7 +46,7 @@ async def chat_stream(user_input, history):
         
         # Example 1: Search and stream chat response
         options = SearchOptions(
-            enhance_query=True,
+            enhance_query=False,
             num_variations=3,
             system_prompt="Generate semantic variations for comprehensive search"
         )
