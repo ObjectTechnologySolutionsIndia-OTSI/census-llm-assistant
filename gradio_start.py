@@ -27,6 +27,8 @@ db_config = {
     "database": os.getenv("POSTGRES_DBNAME"),
 }
 
+embeddings_table_name = "census_data_embeddings_v1"
+bm25_index_path = f"./utils/bm25_inference/{embeddings_table_name}.pkl"
 
 # Enhanced example usage with chat streaming
 async def chat_stream(user_input, history):
@@ -39,7 +41,8 @@ async def chat_stream(user_input, history):
             openai_config=openai_config,
             voyage_config=voyage_config,
             db_config=db_config,
-            bm25_index_path="./utils/bm25_inference/bm25_index.pkl"
+            table_name=embeddings_table_name,
+            bm25_index_path=bm25_index_path
         )
 
         await pipeline.initialize()

@@ -37,7 +37,8 @@ class AsyncEmbeddingProcessor:
                  voyage_input_type: Optional[str] = "document",
                  batch_size: int = 100,
                  max_concurrent_operations: int = 3,
-                 db_config: Optional[Dict[str, str]] = None):
+                 db_config: Optional[Dict[str, str]] = None, 
+                 table_name: str = None):
         """
         Initialize the async embedding processor.
         
@@ -65,7 +66,7 @@ class AsyncEmbeddingProcessor:
         # Initialize clients
         self.voyage_client = None
         self.db_manager = None
-        
+        self.table_name = table_name
         # Semaphore to control concurrent operations
         self.operation_semaphore = asyncio.Semaphore(max_concurrent_operations)
         
@@ -79,7 +80,7 @@ class AsyncEmbeddingProcessor:
             )
             
             # Initialize database manager
-            self.db_manager = AsyncEmbeddingsDBManager(self.db_config)
+            self.db_manager = AsyncEmbeddingsDBManager(self.db_config, table_name=self.table_name)
             await self.db_manager.create_connection_pool()
             await self.db_manager.create_embeddings_table()
             

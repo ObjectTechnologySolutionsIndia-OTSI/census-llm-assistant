@@ -9,6 +9,6 @@ wheels/
 # Virtual environments
 .venv
 .env
-bm25_index.pkl
+*.pkl
 embedding_processor.log
 embeddings_insert.log

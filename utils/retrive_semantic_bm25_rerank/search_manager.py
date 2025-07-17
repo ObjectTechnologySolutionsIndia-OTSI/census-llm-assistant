@@ -40,7 +40,9 @@ class SearchManager:
     def __init__(self, 
                  voyage_config: Dict[str, Any],
                  db_config: Dict[str, Any],
-                 bm25_index_path: str):
+                 bm25_index_path: str,
+                 table_name: str = None
+                 ):
         """
         Initialize the search manager.
         
@@ -59,7 +61,7 @@ class SearchManager:
             model=voyage_config.get("embedding_model", "voyage-3-large")
         )
         
-        self.vector_db = AsyncEmbeddingsDBManager(db_config)
+        self.vector_db = AsyncEmbeddingsDBManager(db_config, table_name=table_name)
         self.bm25_searcher = BM25Searcher(bm25_index_path)
         
         self.initialized = False

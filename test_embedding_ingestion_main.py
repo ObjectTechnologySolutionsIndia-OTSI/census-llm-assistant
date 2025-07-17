@@ -33,8 +33,11 @@ async def main():
     #         "source_file": f"document_{(i//10)+1}.pdf"
     #     })
     
-        
-    with open('all_folders_data.json', 'r', encoding='utf-8') as file:
+    
+    embeddings_table_name = "census_data_embeddings_v1"
+    bm25_index_path = f"./utils/bm25_inference/{embeddings_table_name}.pkl"
+
+    with open('processed_chunks.jsonl', 'r', encoding='utf-8') as file:
         input_data = json.load(file)
     # input_data = []
     
@@ -43,7 +46,8 @@ async def main():
         voyage_model="voyage-3-large",
         voyage_input_type="document",
         batch_size=10,
-        max_concurrent_operations=3
+        max_concurrent_operations=3,
+        table_name=embeddings_table_name
     )
     
     try:
@@ -86,7 +90,7 @@ async def main():
         sample_chunks = [item['chunk'] for item in input_data]
     
         # Initialize indexer
-        indexer = BM25Indexer("./utils/bm25_inference/bm25_index.pkl")
+        indexer = BM25Indexer(bm25_index_path)
 
         # Process chunks
         await indexer.process_chunks(sample_chunks)

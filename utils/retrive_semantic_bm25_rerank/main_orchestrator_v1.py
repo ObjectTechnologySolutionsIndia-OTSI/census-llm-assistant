@@ -103,7 +103,9 @@ class SemanticSearchPipeline:
                  openai_config: Dict[str, Any],
                  voyage_config: Dict[str, Any],
                  db_config: Dict[str, Any],
-                 bm25_index_path: str = "bm25_index.pkl"):
+                 table_name: str = None,
+                 bm25_index_path: str = "bm25_index.pkl"
+                 ):
         """
         Initialize the semantic search pipeline.
         
@@ -115,7 +117,7 @@ class SemanticSearchPipeline:
         """
         self.anthropic_config = anthropic_config
         self.query_enhancer = QueryEnhancer(anthropic_config)
-        self.search_manager = SearchManager(voyage_config, db_config, bm25_index_path)
+        self.search_manager = SearchManager(voyage_config, db_config, bm25_index_path, table_name=table_name)
         self.result_processor = ResultProcessor(voyage_config)
         
         # Initialize Anthropic client for chat streaming
@@ -374,7 +376,7 @@ class SemanticSearchPipeline:
             
             # Use the prepared context (always top 3 from reranked results)
             context = search_result.context_for_chat
-            
+            logger.info(f"{context}")
             logger.info(f"Using top {max_results} results from {len(search_result.reranked_results)} reranked results as context")
             
             # Create system prompt

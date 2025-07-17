@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class AsyncEmbeddingsDBManager:
-    def __init__(self, db_config: Dict[str, str]):
+    def __init__(self, db_config: Dict[str, str], table_name: str = "document_embeddings"):
         """
         Initialize the async database manager with connection parameters.
 
@@ -38,6 +38,10 @@ class AsyncEmbeddingsDBManager:
         self.db_config = db_config
         self.batch_size = 100
         self.connection_pool: Optional[asyncpg.Pool] = None
+        if table_name:
+            self.table_name = table_name
+        else:
+            self.table_name = "document_embeddings"
 
     async def create_connection_pool(self, min_size: int = 10, max_size: int = 20):
         """Create a connection pool for better performance."""
@@ -90,8 +94,8 @@ class AsyncEmbeddingsDBManager:
             async with self.get_db_connection() as conn:
 
                 # 1. Create table with new structure
-                await conn.execute("""
-                    CREATE TABLE IF NOT EXISTS document_embeddings (
+                await conn.execute(f"""
+                    CREATE TABLE IF NOT EXISTS {self.table_name} (
                         id UUID PRIMARY KEY,
                         chunk TEXT NOT NULL,
                         embedding VECTOR(1024),
@@ -109,39 +113,39 @@ class AsyncEmbeddingsDBManager:
                 print("✅ Table ensured with new structure")
 
                 # 2. Create indexes
-                await conn.execute("""
+                await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_embeddings_source_file
-                    ON document_embeddings(source_file)
+                    ON {self.table_name}(source_file)
                 """)
                 print("✅ Index on source_file ensured")
 
-                await conn.execute("""
+                await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_embeddings_source_domain
-                    ON document_embeddings(source_domain)
+                    ON {self.table_name}(source_domain)
                 """)
                 print("✅ Index on source_domain ensured")
 
-                await conn.execute("""
+                await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_embeddings_menu
-                    ON document_embeddings(menu)
+                    ON {self.table_name}(menu)
                 """)
                 print("✅ Index on menu ensured")
 
-                await conn.execute("""
+                await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_embeddings_menu_item
-                    ON document_embeddings(menu_item)
+                    ON {self.table_name}(menu_item)
                 """)
                 print("✅ Index on menu_item ensured")
 
-                await conn.execute("""
+                await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_embeddings_created_at
-                    ON document_embeddings(created_at)
+                    ON {self.table_name}(created_at)
                 """)
                 print("✅ Index on created_at ensured")
 
-                await conn.execute("""
+                await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS idx_embeddings_title
-                    ON document_embeddings(title)
+                    ON {self.table_name}(title)
                 """)
                 print("✅ Index on title ensured")
 
@@ -158,16 +162,16 @@ class AsyncEmbeddingsDBManager:
                 print("✅ Trigger function ensured")
 
                 # 4. Drop trigger (if exists)
-                await conn.execute("""
+                await conn.execute(f"""
                     DROP TRIGGER IF EXISTS update_embeddings_updated_at
-                    ON document_embeddings
+                    ON {self.table_name}
                 """)
                 print("✅ Old trigger dropped (if existed)")
 
                 # 5. Create trigger
-                await conn.execute("""
+                await conn.execute(f"""
                     CREATE TRIGGER update_embeddings_updated_at
-                    BEFORE UPDATE ON document_embeddings
+                    BEFORE UPDATE ON {self.table_name}
                     FOR EACH ROW
                     EXECUTE FUNCTION update_updated_at_column()
                 """)
@@ -274,8 +278,8 @@ class AsyncEmbeddingsDBManager:
                             )
 
                         # Execute batch insert using asyncpg's executemany
-                        insert_query = """
-                        INSERT INTO document_embeddings (
+                        insert_query = f"""
+                        INSERT INTO {self.table_name} (
                             id, chunk, embedding, source_domain, menu, menu_item, 
                             source_link, file_name, title, source_file
                         )
@@ -370,8 +374,8 @@ class AsyncEmbeddingsDBManager:
                                 )
 
                             # Execute batch insert
-                            insert_query = """
-                            INSERT INTO document_embeddings (
+                            insert_query = f"""
+                            INSERT INTO {self.table_name} (
                                 id, chunk, embedding, source_domain, menu, menu_item, 
                                 source_link, file_name, title, source_file
                             )
@@ -423,7 +427,7 @@ class AsyncEmbeddingsDBManager:
         """Get statistics about the embeddings table."""
         try:
             async with self.get_db_connection() as conn:
-                query = """
+                query = f"""
                     SELECT 
                         COUNT(*) as total_records,
                         COUNT(DISTINCT source_file) as unique_source_files,
@@ -432,7 +436,7 @@ class AsyncEmbeddingsDBManager:
                         COUNT(DISTINCT menu_item) as unique_menu_items,
                         MIN(created_at) as earliest_record,
                         MAX(created_at) as latest_record
-                    FROM document_embeddings
+                    FROM {self.table_name}
                 """
 
                 result = await conn.fetchrow(query)
@@ -469,7 +473,7 @@ class AsyncEmbeddingsDBManager:
         """
         try:
             async with self.get_db_connection() as conn:
-                base_query = """
+                base_query = f"""
                     SELECT 
                         id,
                         chunk,
@@ -481,7 +485,7 @@ class AsyncEmbeddingsDBManager:
                         title,
                         source_file,
                         1 - (embedding <=> $1::vector) as similarity_score
-                    FROM document_embeddings
+                    FROM {self.table_name}
                 """
                 
                 where_conditions = []
@@ -522,12 +526,12 @@ class AsyncEmbeddingsDBManager:
         """
         try:
             async with self.get_db_connection() as conn:
-                base_query = """
+                base_query = f"""
                     SELECT 
                         id, chunk, source_domain, menu, menu_item, 
                         source_link, file_name, title, source_file,
                         created_at, updated_at
-                    FROM document_embeddings
+                    FROM {self.table_name}
                 """
                 
                 where_conditions = []
